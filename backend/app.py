@@ -209,91 +209,82 @@ except ImportError as e:
 # MODELS
 # =======================
 covid_model = None
+covid_model_is_tflite = False
 disease_model = None
 disease_scaler = None
 model_classes = ["Normal_Cold", "COVID", "Asthma", "Bronchitis"]  # Default order
 
 def load_or_create_models():
     """Load existing models"""
-    global covid_model, disease_model, disease_scaler, model_classes
+    global covid_model, covid_model_is_tflite, disease_model, disease_scaler, model_classes
     
-    # Try to load COVID model (trained on mel spectrograms)
+    # Try to load COVID model
     disable_heavy_ml = os.environ.get('RENDER_LITE_MODE', 'false').lower() == 'true'
     
     if TENSORFLOW_AVAILABLE and not disable_heavy_ml:
-        covid_model_path = os.path.join(MODEL_DIR, "voiceguard_audio_model_final.keras")
-        if os.path.exists(covid_model_path):
+        # 1. Try TFLite First (Memory Efficient)
+        tflite_path = os.path.join(MODEL_DIR, "voiceguard_audio_model_final.tflite")
+        if os.path.exists(tflite_path):
             try:
-                # Use compile=False to avoid version compatibility issues
-                logger.info(f"Attempting to load COVID model from: {covid_model_path}")
-                try:
-                    # Try regular tf.keras first
-                    covid_model = tf.keras.models.load_model(covid_model_path, compile=False)
-                    logger.info("✅ COVID audio model loaded successfully via tf.keras!")
-                except Exception as keras_err:
-                    err_str = str(keras_err).lower()
-                    logger.warning(f"⚠️ Initial tf.keras load failed: {type(keras_err).__name__}")
-                    
-                    # Fallback for potential Keras 3 mismatch, serialization errors, or environment integration issues
-                    if any(s in err_str for s in ["deserialization", "functional", "keras_version", "keras.src", "keras.api", "not found"]):
-                        logger.info("💡 Potential Keras version mismatch or integration issue, trying direct keras import...")
-                        try:
-                            import keras
-                            covid_model = keras.models.load_model(covid_model_path, compile=False)
-                            logger.info("✅ COVID audio model loaded successfully via direct keras!")
-                        except Exception as e2:
-                            logger.error(f"❌ Both tf.keras and direct keras failed: {str(e2)}")
-                            # If both fail, let it fall through to the final exception handler
-                            raise keras_err
-                    else:
-                        raise keras_err
-                
-                # Verify model structure
-                if covid_model:
-                    try:
-                        logger.info(f"   Model loaded. Input shape: {covid_model.input_shape}")
-                        logger.info(f"   Model output shape: {covid_model.output_shape}")
-                        
-                        # Determine if binary or multi-class
-                        if hasattr(covid_model, 'output_shape'):
-                            if len(covid_model.output_shape) > 1:
-                                output_size = covid_model.output_shape[-1]
-                                logger.info(f"   Model output size: {output_size} classes")
-                                # Based on your training code, it's binary (COVID vs Normal)
-                                # Class 0: COVID, Class 1: Normal
-                                logger.info("   Model type: Binary classification (COVID=0, Normal=1)")
-                    except Exception as shape_err:
-                        logger.warning(f"⚠️ Could not log model shapes: {str(shape_err)}")
-                        
-            except Exception as e:
-                err_msg = str(e)
-                if len(err_msg) > 1000:
-                    err_msg = err_msg[:1000] + "... [TRUNCATED]"
-                logger.error(f"❌ CRITICAL ERROR loading COVID model: {type(e).__name__} - {err_msg}")
-                logger.error(f"   Model path: {covid_model_path}")
-                logger.error(f"   File size: {os.path.getsize(covid_model_path):,} bytes")
-                
-                # Check if it's a ZIP/Keras 3 file
-                try:
-                    import zipfile
-                    if zipfile.is_zipfile(covid_model_path):
-                        with zipfile.ZipFile(covid_model_path, 'r') as z:
-                            if 'config.json' in z.namelist():
-                                logger.info("   🔍 Archive contains config.json (confirmed Keras 3 format)")
-                            elif 'saved_model.pb' in z.namelist() or 'variables/' in z.namelist():
-                                logger.info("   🔍 Archive contains SavedModel structure")
-                except:
-                    pass
-                    
-                import traceback
-                # Truncate traceback too if it's likely to contain the giant config dump
-                tb = traceback.format_exc()
-                if len(tb) > 2000:
-                    tb = tb[:2000] + "... [TRACEBACK TRUNCATED]"
-                logger.error(tb)
+                logger.info(f"⚡ Loading TFLite model from: {tflite_path}")
+                # Load TFLite interpreter
+                interpreter = tf.lite.Interpreter(model_path=tflite_path)
+                interpreter.allocate_tensors()
+                covid_model = interpreter
+                covid_model_is_tflite = True
+                logger.info("✅ COVID TFLite model loaded successfully!")
+            except Exception as tflite_err:
+                logger.error(f"❌ Failed to load TFLite model: {str(tflite_err)}")
                 covid_model = None
-        else:
-            logger.warning(f"⚠️ COVID model file not found at: {covid_model_path}")
+                covid_model_is_tflite = False
+        
+        # 2. Try Keras as Fallback
+        if not covid_model:
+            covid_model_path = os.path.join(MODEL_DIR, "voiceguard_audio_model_final.keras")
+            if os.path.exists(covid_model_path):
+                try:
+                    # Use compile=False to avoid version compatibility issues
+                    logger.info(f"Attempting to load COVID Keras model from: {covid_model_path}")
+                    try:
+                        # Try regular tf.keras first
+                        covid_model = tf.keras.models.load_model(covid_model_path, compile=False)
+                        covid_model_is_tflite = False
+                        logger.info("✅ COVID audio model loaded successfully via tf.keras!")
+                    except Exception as keras_err:
+                        err_str = str(keras_err).lower()
+                        logger.warning(f"⚠️ Initial tf.keras load failed: {type(keras_err).__name__}")
+                        
+                        # Fallback for potential Keras 3 mismatch, serialization errors, or environment integration issues
+                        if any(s in err_str for s in ["deserialization", "functional", "keras_version", "keras.src", "keras.api", "not found"]):
+                            logger.info("💡 Potential Keras version mismatch or integration issue, trying direct keras import...")
+                            try:
+                                import keras
+                                covid_model = keras.models.load_model(covid_model_path, compile=False)
+                                covid_model_is_tflite = False
+                                logger.info("✅ COVID audio model loaded successfully via direct keras!")
+                            except Exception as e2:
+                                logger.error(f"❌ Both tf.keras and direct keras failed: {str(e2)}")
+                                # If both fail, let it fall through to the final exception handler
+                                raise keras_err
+                        else:
+                            raise keras_err
+                    
+                    # Verify model structure
+                    if covid_model:
+                        try:
+                            logger.info(f"   Model loaded. Input shape: {covid_model.input_shape}")
+                            logger.info(f"   Model output shape: {covid_model.output_shape}")
+                        except Exception as shape_err:
+                            logger.warning(f"⚠️ Could not log model shapes: {str(shape_err)}")
+                            
+                except Exception as e:
+                    err_msg = str(e)
+                    if len(err_msg) > 1000:
+                        err_msg = err_msg[:1000] + "... [TRUNCATED]"
+                    logger.error(f"❌ CRITICAL ERROR loading COVID model: {type(e).__name__} - {err_msg}")
+                    covid_model = None
+            else:
+                logger.warning(f"⚠️ COVID model file not found at: {covid_model_path}")
     else:
         if disable_heavy_ml:
             logger.info("🔌 Lite Mode: Skipping COVID audio model loading to save memory")
@@ -564,19 +555,37 @@ def predict_from_audio(mel_spectrogram):
     """
     Make prediction using the trained COVID model
     Returns: (prediction_class, confidence, covid_probability)
-    Your model: class 0 = COVID, class 1 = Normal
+    Supports both Keras and TFLite
     """
     try:
         if covid_model is None:
             logger.warning("⚠️ COVID model not loaded")
             return None, 0.0, 0.0
         
-        # Make prediction
-        predictions = covid_model.predict(mel_spectrogram, verbose=0)
+        predictions = None
         
-        # Your model outputs: [prob_class0, prob_class1] where:
-        # class0 = COVID (0 in training)
-        # class1 = Normal (1 in training)
+        # 1. Handle TFLite
+        if covid_model_is_tflite:
+            input_details = covid_model.get_input_details()
+            output_details = covid_model.get_output_details()
+            
+            # Ensure input is float32
+            input_data = mel_spectrogram.astype(np.float32)
+            
+            # Set tensor
+            covid_model.set_tensor(input_details[0]['index'], input_data)
+            
+            # Run inference
+            covid_model.invoke()
+            
+            # Get result
+            predictions = covid_model.get_tensor(output_details[0]['index'])
+            
+        # 2. Handle Keras
+        else:
+            predictions = covid_model.predict(mel_spectrogram, verbose=0)
+        
+        # Interpret predictions (matches training: [COVID, Normal])
         
         if len(predictions.shape) == 2:
             if predictions.shape[-1] == 2:
