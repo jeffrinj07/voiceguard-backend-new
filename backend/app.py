@@ -5,6 +5,7 @@ import sys
 
 # CRITICAL: Disable Numba JIT to prevent CPU freezing on weak Render hardware
 os.environ['NUMBA_DISABLE_JIT'] = '1'
+os.environ['NUMBA_CACHE_DIR'] = '/tmp'  # Prevent Numba cache permission errors
 
 import json
 import logging
@@ -1802,7 +1803,7 @@ def predict():
                         # Map prediction to class
                         if hasattr(disease_model, 'classes_'):
                             classes = disease_model.classes_
-                            pred_idx = np.argmax(proba)
+                            pred_idx = int(proba.argmax())  # Fixed: use ndarray method instead of bare np.argmax
                             ml_prediction = classes[pred_idx]
                         else:
                             ml_prediction = raw_prediction
