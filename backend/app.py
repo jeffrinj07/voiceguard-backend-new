@@ -286,6 +286,7 @@ def _import_soxr():
         logger.error(f"❌ soxr not available: {str(e)}")
         return None
 
+
 def _import_scipy_signal():
     global SCIPY_AVAILABLE
     try:
@@ -573,18 +574,18 @@ def safe_process_audio(audio_file):
 # =======================
 def process_audio_for_covid(y, sr):
     """
-    Process pre-loaded audio data to match your training data preparation.
-    Uses ultra-fast NumPy/SciPy math to bypass librosa's heavy CPU overhead.
+    Process pre-loaded audio data using PURE NumPy/SciPy.
+    Completely bypasses librosa and Numba to fix the get_call_template crash.
     """
     log_memory("Start process_audio_for_covid")
     
-    # Lazy imports
-    librosa_module = _import_librosa()
+    # Only need NumPy, SciPy and OpenCV - NO LIBROSA
     np_module = _import_numpy()
     cv2_module = _import_cv2()
+    scipy_signal = _import_scipy_signal()
     
-    if not librosa_module or not np_module:
-        logger.error("❌ Librosa or NumPy not available for audio processing")
+    if not np_module:
+        logger.error("❌ NumPy not available for audio processing")
         return None
     
     if not cv2_module:
@@ -592,31 +593,78 @@ def process_audio_for_covid(y, sr):
         return None
         
     try:
-        # Work on a copy to avoid affecting other functions
+        # Work on a copy
         y_proc = y.copy()
         
-        # Ensure fixed length (3 seconds * 22050 Hz = 66150 samples)
-        target_len = 3 * 22050  # 66150 samples
+        # Ensure fixed length (3 seconds * 22050 Hz = 66150 samples) - matches training
+        target_len = 3 * 22050
         if len(y_proc) < target_len:
             y_proc = np_module.pad(y_proc, (0, target_len - len(y_proc)), mode='constant')
         else:
             y_proc = y_proc[:target_len]
         
-        # SLOW STEP: Generate mel spectrogram 
-        # We still use librosa here but with Numba JIT disabled it won't freeze the process
-        # However, we'll use a smaller n_fft if possible (already at 2048 which is standard)
-        logger.info("📡 Calculating spectrogram (Blue-Shell Mode)...")
-        mel_spec = librosa_module.feature.melspectrogram(
-            y=y_proc, 
-            sr=sr, 
-            n_mels=128, 
-            fmax=8000, 
-            n_fft=2048, 
-            hop_length=512
-        )
+        logger.info("📡 Calculating mel spectrogram (Pure NumPy mode - no Numba)...")
         
-        # Convert to dB scale (power_to_db)
-        mel_spec_db = librosa_module.power_to_db(mel_spec, ref=np_module.max)
+        # === PURE NUMPY/SCIPY MEL SPECTROGRAM ===
+        n_fft = 2048
+        hop_length = 512
+        n_mels = 128
+        fmax = 8000.0
+        
+        # 1. Compute STFT using scipy (no Numba)
+        if scipy_signal:
+            _, _, stft_matrix = scipy_signal.stft(
+                y_proc, fs=sr, nperseg=n_fft, noverlap=n_fft - hop_length,
+                window='hann', boundary=None, padded=False
+            )
+            # Power spectrogram
+            power_spec = np_module.abs(stft_matrix) ** 2
+        else:
+            # Pure NumPy FFT fallback (slower but no dependencies)
+            frames = [y_proc[i:i+n_fft] for i in range(0, len(y_proc) - n_fft, hop_length)]
+            window = np_module.hanning(n_fft)
+            power_spec = np_module.array([np_module.abs(np_module.fft.rfft(f * window)) ** 2 for f in frames]).T
+        
+        # 2. Build Mel filterbank (pure NumPy)
+        # Hz to Mel conversion
+        def hz_to_mel(hz):
+            return 2595.0 * np_module.log10(1.0 + hz / 700.0)
+        def mel_to_hz(mel):
+            return 700.0 * (10.0 ** (mel / 2595.0) - 1.0)
+        
+        fmin = 0.0
+        mel_min = hz_to_mel(fmin)
+        mel_max = hz_to_mel(fmax)
+        mel_points = np_module.linspace(mel_min, mel_max, n_mels + 2)
+        hz_points = mel_to_hz(mel_points)
+        
+        # Map Hz to FFT bin indices
+        n_freqs = power_spec.shape[0]
+        fft_freqs = np_module.linspace(0, sr / 2.0, n_freqs)
+        bin_points = np_module.floor((n_fft + 1) * hz_points / sr).astype(int)
+        bin_points = np_module.clip(bin_points, 0, n_freqs - 1)
+        
+        # Create filterbank matrix
+        filterbank = np_module.zeros((n_mels, n_freqs))
+        for m in range(1, n_mels + 1):
+            f_left = bin_points[m - 1]
+            f_center = bin_points[m]
+            f_right = bin_points[m + 1]
+            
+            for k in range(f_left, f_center):
+                if f_center != f_left:
+                    filterbank[m-1, k] = (k - f_left) / (f_center - f_left)
+            for k in range(f_center, f_right):
+                if f_right != f_center:
+                    filterbank[m-1, k] = (f_right - k) / (f_right - f_center)
+        
+        # 3. Apply filterbank
+        mel_spec = np_module.dot(filterbank, power_spec)
+        mel_spec = np_module.maximum(mel_spec, 1e-10)  # Avoid log(0)
+        
+        # 4. Convert to dB (power_to_db equivalent)
+        mel_spec_db = 10.0 * np_module.log10(mel_spec)
+        mel_spec_db -= np_module.max(mel_spec_db)  # Normalize relative to max
         
         # Fixed shape handling - matches training
         if mel_spec_db.shape[1] < 100:
@@ -624,11 +672,11 @@ def process_audio_for_covid(y, sr):
         else:
             mel_spec_db = mel_spec_db[:, :100]
         
-        # Resize to 224x224 (model's expected input)
-        mel_resized = cv2_module.resize(mel_spec_db, (224, 224), interpolation=cv2_module.INTER_LINEAR)
+        # Resize to 224x224 (model expected input)
+        mel_spec_float32 = mel_spec_db.astype(np_module.float32)
+        mel_resized = cv2_module.resize(mel_spec_float32, (224, 224), interpolation=cv2_module.INTER_LINEAR)
         
-        # Normalization - MATCHES TRAINING
-        # Optimized with NumPy vectorization
+        # Normalization - matches training
         eps = 1e-8
         mean_val = np_module.mean(mel_resized)
         std_val = np_module.std(mel_resized)
@@ -636,16 +684,13 @@ def process_audio_for_covid(y, sr):
         mel_normalized = np_module.clip(mel_normalized, -3, 3)
         mel_normalized = (mel_normalized + 3) / 6  # Scale to [0, 1]
         
-        # Stack to 3 channels (RGB)
+        # Stack to 3 channels (RGB) and add batch dimension
         mel_rgb = np_module.stack([mel_normalized] * 3, axis=-1)
-        
-        # Add batch dimension: (1, 224, 224, 3)
         mel_rgb = mel_rgb[np_module.newaxis, ...]
         
-        logger.info(f"✅ Audio processed for COVID: shape {mel_rgb.shape}")
+        logger.info(f"✅ Audio processed for COVID (Pure NumPy): shape {mel_rgb.shape}")
         log_memory("End process_audio_for_covid")
         
-        # EXPLICIT GARBAGE COLLECTION
         del y_proc
         gc.collect()
         
@@ -653,6 +698,8 @@ def process_audio_for_covid(y, sr):
         
     except Exception as e:
         logger.error(f"❌ Audio processing for COVID failed: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
         return None
 
 # =======================
