@@ -218,7 +218,9 @@ def load_or_create_models():
     global covid_model, disease_model, disease_scaler, model_classes
     
     # Try to load COVID model (trained on mel spectrograms)
-    if TENSORFLOW_AVAILABLE:
+    disable_heavy_ml = os.environ.get('RENDER_LITE_MODE', 'false').lower() == 'true'
+    
+    if TENSORFLOW_AVAILABLE and not disable_heavy_ml:
         covid_model_path = os.path.join(MODEL_DIR, "voiceguard_audio_model_final.keras")
         if os.path.exists(covid_model_path):
             try:
@@ -293,7 +295,10 @@ def load_or_create_models():
         else:
             logger.warning(f"⚠️ COVID model file not found at: {covid_model_path}")
     else:
-        logger.warning("⚠️ TensorFlow not available, skipping COVID model")
+        if disable_heavy_ml:
+            logger.info("🔌 Lite Mode: Skipping COVID audio model loading to save memory")
+        else:
+            logger.warning("⚠️ TensorFlow not available, skipping COVID model")
     
     # Try to load disease model
     disease_model_path = os.path.join(MODEL_DIR, "disease_classification_model.pkl")
@@ -1620,7 +1625,14 @@ def predict():
                 logger.info(f"🎤 Audio file received: {audio_file.filename}")
                 
                 # Extract audio features for rule-based enhancement (optional)
-                audio_features = extract_audio_features_for_rules(audio_file)
+                # Skip if in Lite Mode to avoid Librosa memory spikes
+                disable_heavy_ml = os.environ.get('RENDER_LITE_MODE', 'false').lower() == 'true'
+                
+                if not disable_heavy_ml:
+                    audio_features = extract_audio_features_for_rules(audio_file)
+                else:
+                    logger.info("🔌 Lite Mode: Skipping heavy audio feature extraction")
+                    audio_features = None
                 
                 # Process for COVID detection using mel spectrograms (matches training)
                 # CHECK FOR LITE MODE
