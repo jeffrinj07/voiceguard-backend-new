@@ -321,6 +321,19 @@
             align-items: center;
             transition: 0.3s;
             border: 2px solid transparent;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .symptom-label {
+            flex: 1;
+            min-width: 150px;
+        }
+
+        .symptom-choices {
+            display: flex;
+            gap: 5px;
+            white-space: nowrap;
         }
 
         .symptom:hover {
@@ -726,6 +739,9 @@
 
     <!-- ===== MAIN CONTENT ===== -->
     <div class="main">
+        <div id="locationStatus"
+            style="padding: 10px; border-radius: 8px; margin-bottom: 15px; font-size: 0.9em; text-align: center; display: none; max-width: 950px; margin-left: auto; margin-right: auto;">
+        </div>
 
         <!-- HOME PAGE -->
         <div class="section active" id="home">
@@ -939,9 +955,6 @@
         <!-- SYMPTOMS PAGE -->
         <div class="section" id="symptoms">
             <div class="card">
-                <div id="locationStatus"
-                    style="padding: 10px; border-radius: 8px; margin-bottom: 15px; font-size: 0.9em; text-align: center; display: none;">
-                </div>
                 <h2 data-en="Mark Your Symptoms" data-ta="உங்கள் அறிகுறிகளைக் குறிக்கவும்">Mark Your Symptoms</h2>
                 <p style="margin-bottom:20px;color:#666;"
                     data-en="Please carefully select all symptoms you are experiencing:"
@@ -1340,7 +1353,7 @@
                 d.className = "symptom";
                 d.innerHTML = `
                     <span class="symptom-label">${translations[s][currentLang]}</span>
-                    <div>
+                    <div class="symptom-choices">
                         <span class="choice yes-choice" onclick="setSym('${s}','yes',this)"
                             data-en="Yes" data-ta="ஆம்">${currentLang === 'en' ? 'Yes' : 'ஆம்'}</span>
                         <span class="choice selected no-choice" onclick="setSym('${s}','no',this)"
@@ -1351,7 +1364,7 @@
             });
 
             // Request location when initializing UI for screening
-            getLocation();
+            // getLocation(); // Moved to showCheckHealth for better mobile compatibility
         }
 
         // ===== GEOLOCATION =====
@@ -1375,9 +1388,10 @@
                         if (statusDiv) {
                             statusDiv.style.background = "#d4edda";
                             statusDiv.style.color = "#155724";
-                            statusDiv.innerHTML = currentLang === 'en'
+                            statusDiv.innerHTML = (currentLang === 'en'
                                 ? `📍 Location Active (${currentLat.toFixed(2)}, ${currentLng.toFixed(2)})`
-                                : `📍 இருப்பிடம் செயலில் உள்ளது (${currentLat.toFixed(2)}, ${currentLng.toFixed(2)})`;
+                                : `📍 இருப்பிடம் செயலில் உள்ளது (${currentLat.toFixed(2)}, ${currentLng.toFixed(2)})`) +
+                                ` <a href="javascript:void(0)" onclick="getLocation()" style="margin-left:10px;color:#155724">🔄</a>`;
                         }
                     },
                     (error) => {
@@ -1385,11 +1399,13 @@
                         if (statusDiv) {
                             statusDiv.style.background = "#f8d7da";
                             statusDiv.style.color = "#721c24";
-                            statusDiv.innerHTML = currentLang === 'en'
+                            statusDiv.innerHTML = (currentLang === 'en'
                                 ? "📍 Location Disabled (Nearby hospitals won't be shown)"
-                                : "📍 இருப்பிடம் முடக்கப்பட்டுள்ளது (அருகிலுள்ள மருத்துவமனைகள் காட்டப்படாது)";
+                                : "📍 இருப்பிடம் முடக்கப்பட்டுள்ளது (அருகிலுள்ள மருத்துவமனைகள் காட்டப்படாது)") +
+                                ` <button onclick="getLocation()" style="padding:2px 8px;font-size:0.8em;background:#721c24;color:white;border:none;border-radius:4px;margin-left:10px;vertical-align:middle;cursor:pointer">Retry</button>`;
                         }
-                    }
+                    },
+                    { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
                 );
             } else if (statusDiv) {
                 statusDiv.style.display = "none";
@@ -1458,6 +1474,9 @@
 
             // Load patients from Firestore
             await loadPatients();
+
+            // Request location on user gesture (button click) for mobile compatibility
+            getLocation();
 
             show("patientSelect");
         }
@@ -1719,7 +1738,7 @@
                 // Send to backend - Use Render URL when deployed
                 const backendUrl = window.location.hostname === 'localhost'
                     ? "http://localhost:5000/predict"
-                    : "https://voiceguard-backend.onrender.com/predict"; // Update with your Render URL
+                    : "https://voiceguard-backend-new.onrender.com/predict"; // Update with your Render URL
 
                 const response = await fetch(backendUrl, {
                     method: "POST",
@@ -1731,6 +1750,7 @@
                 console.log("Analysis result:", result);
 
                 if (!response.ok) {
+                    console.error("❌ Server returned error status:", response.status);
                     throw new Error(result.error || `Server error: ${response.status}`);
                 }
 
@@ -2141,7 +2161,7 @@
             try {
                 const backendUrl = window.location.hostname === 'localhost'
                     ? "http://localhost:5000/health"
-                    : "https://voiceguard-backend.onrender.com/health"; // Update with your Render URL
+                    : "https://voiceguard-backend-new.onrender.com/health"; // Update with your Render URL
 
                 const response = await fetch(backendUrl, {
                     method: "GET",

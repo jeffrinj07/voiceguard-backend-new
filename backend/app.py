@@ -46,18 +46,28 @@ app = Flask(__name__,
 # Configure CORS
 CORS(app, resources={
     r"/*": {
-        "origins": [
-            "http://localhost:5000",
-            "http://localhost:8080",
-            "http://127.0.0.1:5000",
-            "http://127.0.0.1:8080",
-            "https://voiceguard-5db49.web.app",
-            "https://voiceguard-5db49.firebaseapp.com"
-        ],
+        "origins": "*",
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization"]
+        "allow_headers": ["Content-Type", "Authorization", "Accept", "Origin", "X-Requested-With"]
     }
 })
+
+# Global error handler to ensure CORS headers are ALWAYs present
+@app.after_request
+def add_cors_headers(response):
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,Accept,Origin,X-Requested-With')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    return response
+
+@app.errorhandler(500)
+def handle_500_error(e):
+    logger.error(f"Internal Server Error: {str(e)}")
+    return jsonify({
+        "success": False,
+        "error": "Internal Server Error - The server might be restarting or out of memory.",
+        "details": str(e)
+    }), 500
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
