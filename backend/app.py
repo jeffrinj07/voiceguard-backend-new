@@ -334,7 +334,10 @@ def load_or_create_models():
     
     # 3. DISEASE CLASSIFICATION MODEL LOADING (Pickle)
     disease_model_path = os.path.join(MODEL_DIR, "disease_classification_model.pkl")
-    disease_scaler_path = os.path.join(MODEL_DIR, "disease_scaler.pkl")
+    scaler_paths = [
+        os.path.join(MODEL_DIR, "disease_scaler.pkl"),
+        os.path.join(MODEL_DIR, "disease_scaler (1).pkl")
+    ]
     
     if os.path.exists(disease_model_path):
         try:
@@ -343,46 +346,23 @@ def load_or_create_models():
                 disease_model = joblib_module.load(disease_model_path)
                 logger.info(f"✅ Disease classification model loaded from: {disease_model_path}")
                 
-                if os.path.exists(disease_scaler_path):
-                    disease_scaler = joblib_module.load(disease_scaler_path)
-                    logger.info(f"✅ Disease scaler loaded from: {disease_scaler_path}")
+                # Try to get classes from model
+                if hasattr(disease_model, 'classes_'):
+                    model_classes = disease_model.classes_
+                    logger.info(f"   Model classes: {model_classes}")
+                
+                # Load scaler (trying multiple paths)
+                for scaler_path in scaler_paths:
+                    if os.path.exists(scaler_path):
+                        disease_scaler = joblib_module.load(scaler_path)
+                        logger.info(f"✅ Disease scaler loaded from: {os.path.basename(scaler_path)}")
+                        break
                 
                 log_memory("After Disease models load")
         except Exception as e:
             logger.error(f"❌ Failed to load disease classification model: {str(e)}")
     
     log_memory("End of load_or_create_models")
-    
-    # Try to load disease model
-    disease_model_path = os.path.join(MODEL_DIR, "disease_classification_model.pkl")
-    if os.path.exists(disease_model_path) and JOBLIB_AVAILABLE:
-        try:
-            disease_model = joblib.load(disease_model_path)
-            logger.info("✅ Disease model loaded successfully!")
-            
-            # Try to get classes from model
-            if hasattr(disease_model, 'classes_'):
-                model_classes = disease_model.classes_
-                logger.info(f"   Model classes: {model_classes}")
-        except Exception as e:
-            logger.error(f"❌ Failed to load disease model: {str(e)}")
-            disease_model = None
-    else:
-        logger.warning("⚠️ Disease model not found or joblib unavailable")
-    
-    # Try to load disease scaler
-    scaler_paths = [
-        os.path.join(MODEL_DIR, "disease_scaler.pkl"),
-        os.path.join(MODEL_DIR, "disease_scaler (1).pkl")
-    ]
-    for scaler_path in scaler_paths:
-        if os.path.exists(scaler_path) and JOBLIB_AVAILABLE:
-            try:
-                disease_scaler = joblib.load(scaler_path)
-                logger.info(f"✅ Disease scaler loaded from {os.path.basename(scaler_path)}")
-                break
-            except Exception as e:
-                logger.error(f"❌ Failed to load scaler: {str(e)}")
 
 # Load models
 load_or_create_models()
