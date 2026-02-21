@@ -1,0 +1,23 @@
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# Models (Optional: only if using Git LFS, otherwise they should be tracked)
+# backend/models/
+
+# Firebase
+.firebase/
+firebase-debug.log*
+firestore-debug.log*
+ui-debug.log*
+backend/firebase-credentials.json
+
+# OS
+.DS_Store
+Thumbs.db
+backend/firebase-credentials.json
+"backend/firebase-credentials.json" 

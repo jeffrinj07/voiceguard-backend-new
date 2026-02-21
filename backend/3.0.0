@@ -1,0 +1,23 @@
+Requirement already satisfied: keras in C:\Users\Lenovo\Desktop\voiceguard_project\venv\Lib\site-packages (2.13.1)
+Collecting keras
+  Downloading keras-3.13.2-py3-none-any.whl.metadata (6.3 kB)
+Requirement already satisfied: absl-py in C:\Users\Lenovo\Desktop\voiceguard_project\venv\Lib\site-packages (from keras) (2.3.1)
+Requirement already satisfied: numpy in C:\Users\Lenovo\Desktop\voiceguard_project\venv\Lib\site-packages (from keras) (1.26.4)
+Requirement already satisfied: rich in C:\Users\Lenovo\Desktop\voiceguard_project\venv\Lib\site-packages (from keras) (14.3.1)
+Requirement already satisfied: namex in C:\Users\Lenovo\Desktop\voiceguard_project\venv\Lib\site-packages (from keras) (0.1.0)
+Requirement already satisfied: h5py in C:\Users\Lenovo\Desktop\voiceguard_project\venv\Lib\site-packages (from keras) (3.15.1)
+Requirement already satisfied: optree in C:\Users\Lenovo\Desktop\voiceguard_project\venv\Lib\site-packages (from keras) (0.18.0)
+Requirement already satisfied: ml-dtypes in C:\Users\Lenovo\Desktop\voiceguard_project\venv\Lib\site-packages (from keras) (0.5.4)
+Requirement already satisfied: packaging in C:\Users\Lenovo\Desktop\voiceguard_project\venv\Lib\site-packages (from keras) (26.0)
+Requirement already satisfied: typing-extensions>=4.6.0 in C:\Users\Lenovo\Desktop\voiceguard_project\venv\Lib\site-packages (from optree->keras) (4.15.0)
+Requirement already satisfied: markdown-it-py>=2.2.0 in C:\Users\Lenovo\Desktop\voiceguard_project\venv\Lib\site-packages (from rich->keras) (4.0.0)
+Requirement already satisfied: pygments<3.0.0,>=2.13.0 in C:\Users\Lenovo\Desktop\voiceguard_project\venv\Lib\site-packages (from rich->keras) (2.19.2)
+Requirement already satisfied: mdurl~=0.1 in C:\Users\Lenovo\Desktop\voiceguard_project\venv\Lib\site-packages (from markdown-it-py>=2.2.0->rich->keras) (0.1.2)
+Downloading keras-3.13.2-py3-none-any.whl (1.5 MB)
+   ------------------ 1.5/1.5 MB 1.0 MB/s  0:00:01
+Installing collected packages: keras
+  Attempting uninstall: keras
+    Found existing installation: keras 2.13.1
+    Uninstalling keras-2.13.1:
+      Successfully uninstalled keras-2.13.1
+Successfully installed keras-3.13.2
