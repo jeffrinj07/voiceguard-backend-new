@@ -64,13 +64,7 @@ CORS(app, resources={
     }
 })
 
-# Global error handler to ensure CORS headers are ALWAYs present
-@app.after_request
-def add_cors_headers(response):
-    response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,Accept,Origin,X-Requested-With')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
-    return response
+
 
 @app.errorhandler(500)
 def handle_500_error(e):
