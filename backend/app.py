@@ -262,6 +262,15 @@ def _import_joblib():
         JOBLIB_AVAILABLE = False
         return None
 
+def _import_soundfile():
+    try:
+        import soundfile as sf
+        logger.info("✅ Soundfile imported successfully")
+        return sf
+    except ImportError as e:
+        logger.error(f"❌ Soundfile not available: {str(e)}")
+        return None
+
 def _import_scipy_signal():
     global SCIPY_AVAILABLE
     try:
@@ -472,39 +481,82 @@ def enhance_features(symptoms_dict, age, cough_days):
 # =======================
 def safe_process_audio(audio_file):
     """
-    Safely process audio file with robust format detection and pointer management.
-    Ensures input is valid for librosa.
+    Safely process audio file using soundfile (faster/lighter than librosa.load).
+    Loads native rate first, slices to 10s, then resamples if needed.
     """
     log_memory("Before safe_process_audio")
     
     # Lazy imports
+    sf_module = _import_soundfile()
     librosa_module = _import_librosa()
     np_module = _import_numpy()
     
-    if not librosa_module:
-        logger.error("❌ Librosa not available for safe_process_audio")
-        return None, "Librosa not available"
+    if not sf_module or not librosa_module or not np_module:
+        logger.warning("⚠️ Soundfile/Librosa/NumPy missing, falling back to basic librosa.load")
+        if librosa_module:
+            try:
+                audio_file.seek(0)
+                y, sr = librosa_module.load(audio_file, sr=22050, duration=10.0)
+                return y, sr
+            except:
+                return None, "All loaders failed"
+        return None, "Required modules for audio loading not available"
     
     try:
-        # Ensure file pointer is at start
-        current_pos = audio_file.tell()
+        # 1. RAW LOAD: Use soundfile to read without resampling
         audio_file.seek(0)
+        logger.info("📡 Loading raw audio via soundfile...")
         
-        # Load audio at standard sample rate
-        # Using librosa.load with duration cap to prevent OOM
-        logger.info("📡 Loading audio via librosa...")
-        y, sr = librosa_module.load(audio_file, sr=22050, duration=10.0)
+        # Read the file header to check length first if possible
+        # For simplicity and speed on small files, we just read up to 15s worth of samples
+        # most mobile recordings are 44.1k or 48k. 15s * 48k = 720k samples.
+        data, native_sr = sf_module.read(audio_file)
         
-        # Reset pointer
-        audio_file.seek(current_pos)
+        # 2. SLICE FIRST: Only keep what we need (max 10s)
+        max_samples = 10 * native_sr
+        if len(data) > max_samples:
+            logger.info(f"✂️ Slicing audio from {len(data)/native_sr:.1f}s to 10.0s")
+            data = data[:max_samples]
+            
+        # Handle stereo -> mono
+        if len(data.shape) > 1:
+            logger.info("📢 Converting stereo to mono")
+            data = np_module.mean(data, axis=1)
+            
+        # 3. RESAMPLE: Use librosa.resample on the small slice
+        # This uses soxr (high performance) if installed
+        target_sr = 22050
+        if native_sr != target_sr:
+            logger.info(f"🔄 Resampling: {native_sr}Hz -> {target_sr}Hz (sliced data)")
+            y = librosa_module.resample(y=data, orig_sr=native_sr, target_sr=target_sr)
+        else:
+            y = data
+            
+        # Reset file pointer for housekeeping
+        audio_file.seek(0)
         
         if len(y) == 0:
             return None, "Empty audio data"
             
-        log_memory("After librosa.load")
-        return y, sr
+        log_memory("After optimized audio load")
+        
+        # Cleanup raw data copy
+        if id(y) != id(data):
+            del data
+        gc.collect()
+        
+        return y, target_sr
+        
     except Exception as e:
         logger.error(f"❌ Error in safe_process_audio: {str(e)}")
+        # Ultimate fallback
+        try:
+            audio_file.seek(0)
+            if librosa_module:
+                y, sr = librosa_module.load(audio_file, sr=22050, duration=10.0)
+                return y, sr
+        except:
+            pass
         return None, str(e)
 
 # =======================
