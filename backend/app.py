@@ -11,6 +11,7 @@ import io
 import math
 import requests
 import time
+import gc
 
 # Try importing cv2 for image processing
 try:
@@ -534,6 +535,10 @@ def process_audio_for_covid(audio_file):
         audio_file.seek(current_pos)
         
         logger.info(f"✅ Audio processed for COVID: shape {mel_rgb.shape}")
+        
+        # EXPLICIT GARBAGE COLLECTION
+        gc.collect()
+        
         return mel_rgb
         
     except Exception as e:
@@ -1618,12 +1623,29 @@ def predict():
                 audio_features = extract_audio_features_for_rules(audio_file)
                 
                 # Process for COVID detection using mel spectrograms (matches training)
-                if covid_model and TENSORFLOW_AVAILABLE:
-                    mel_spectrogram = process_audio_for_covid(audio_file)
-                    
-                    if mel_spectrogram is not None:
-                        # Make prediction using the COVID model
-                        audio_prediction, audio_confidence, audio_covid_score = predict_from_audio(mel_spectrogram)
+                # CHECK FOR LITE MODE
+                disable_heavy_ml = os.environ.get('RENDER_LITE_MODE', 'false').lower() == 'true'
+                
+                if covid_model and TENSORFLOW_AVAILABLE and not disable_heavy_ml:
+                    try:
+                        logger.info("🧠 Running heavy COVID audio ML model...")
+                        mel_spectrogram = process_audio_for_covid(audio_file)
+                        
+                        if mel_spectrogram is not None:
+                            # Make prediction using the COVID model
+                            audio_prediction, audio_confidence, audio_covid_score = predict_from_audio(mel_spectrogram)
+                            
+                            # Clean up
+                            del mel_spectrogram
+                            gc.collect()
+                    except Exception as ml_err:
+                        logger.error(f"⚠️ Heavy ML failed (possibly OOM): {str(ml_err)}")
+                        # Fall through to rule-based
+                else:
+                    if disable_heavy_ml:
+                        logger.info("🔌 Lite Mode: Skipping heavy COVID audio ML model")
+                    else:
+                        logger.info("⚠️ COVID model or TensorFlow not available for audio ML")
         
         # ===== SYMPTOM-BASED PREDICTION =====
         ml_prediction = None
