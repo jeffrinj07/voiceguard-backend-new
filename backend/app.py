@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, make_response
 from flask_cors import CORS
 import os
 import json
@@ -42,6 +42,7 @@ os.makedirs(MODEL_DIR, exist_ok=True)
 app = Flask(__name__,
             static_folder=FRONTEND_DIR,
             static_url_path='')
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB limit
 
 # Configure CORS
 CORS(app, resources={
@@ -1477,17 +1478,27 @@ def save_screening_to_firestore(user_id, patient_name, result_data, symptoms_dat
 # =======================
 # MAIN PREDICTION ENDPOINT
 # =======================
-@app.route("/predict", methods=["POST", "GET"])
+@app.route("/predict", methods=["POST", "GET", "OPTIONS"])
 def predict():
     """
     Main prediction endpoint with improved logic:
+    - Handles CORS preflight (OPTIONS)
     - Uses ML models if available and confident
     - Falls back to rule-based if models fail or low confidence
     - Audio analysis uses mel spectrograms (matching training)
     - Comprehensive severity assessment
     """
+    # Handle preflight request explicitly
+    if request.method == "OPTIONS":
+        response = make_response()
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add('Access-Control-Allow-Headers', "Content-Type,Authorization,Accept,Origin,X-Requested-With")
+        response.headers.add('Access-Control-Allow-Methods', "GET,PUT,POST,DELETE,OPTIONS")
+        return response
+        
     try:
-        logger.info("📥 Received prediction request")
+        logger.info(f"📥 Received {request.method} prediction request from {request.remote_addr}")
+        logger.info(f"Headers: {dict(request.headers)}")
         
         # Handle GET requests for testing
         if request.method == "GET":
