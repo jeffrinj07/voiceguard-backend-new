@@ -182,12 +182,19 @@ except ImportError as e:
     CV2_AVAILABLE = False
 
 try:
-    import tensorflow as tf
-    TENSORFLOW_AVAILABLE = True
-    logger.info("✅ TensorFlow imported successfully")
-except ImportError as e:
-    logger.error(f"❌ TensorFlow not available: {str(e)}")
+    import tflite_runtime.interpreter as tflite
+    TFLITE_RUNTIME_AVAILABLE = True
     TENSORFLOW_AVAILABLE = False
+    logger.info("✅ tflite-runtime imported successfully")
+except ImportError:
+    TFLITE_RUNTIME_AVAILABLE = False
+    try:
+        import tensorflow as tf
+        TENSORFLOW_AVAILABLE = True
+        logger.info("✅ TensorFlow imported successfully (fallback)")
+    except ImportError as e:
+        logger.error(f"❌ Neither tflite-runtime nor TensorFlow available: {str(e)}")
+        TENSORFLOW_AVAILABLE = False
 
 try:
     import joblib
@@ -221,14 +228,19 @@ def load_or_create_models():
     # Try to load COVID model
     disable_heavy_ml = os.environ.get('RENDER_LITE_MODE', 'false').lower() == 'true'
     
-    if TENSORFLOW_AVAILABLE and not disable_heavy_ml:
+    if (TFLITE_RUNTIME_AVAILABLE or TENSORFLOW_AVAILABLE) and not disable_heavy_ml:
         # 1. Try TFLite First (Memory Efficient)
         tflite_path = os.path.join(MODEL_DIR, "voiceguard_audio_model_final.tflite")
         if os.path.exists(tflite_path):
             try:
                 logger.info(f"⚡ Loading TFLite model from: {tflite_path}")
-                # Load TFLite interpreter
-                interpreter = tf.lite.Interpreter(model_path=tflite_path)
+                # Load TFLite interpreter using either tflite-runtime or tensorflow.lite
+                if TFLITE_RUNTIME_AVAILABLE:
+                    interpreter = tflite.Interpreter(model_path=tflite_path)
+                else:
+                    import tensorflow as tf
+                    interpreter = tf.lite.Interpreter(model_path=tflite_path)
+                    
                 interpreter.allocate_tensors()
                 covid_model = interpreter
                 covid_model_is_tflite = True
@@ -238,50 +250,18 @@ def load_or_create_models():
                 covid_model = None
                 covid_model_is_tflite = False
         
-        # 2. Try Keras as Fallback
-        if not covid_model:
+        # 2. Try Keras as Fallback (Only if TFLite failed and full TF is available)
+        if not covid_model and TENSORFLOW_AVAILABLE:
             covid_model_path = os.path.join(MODEL_DIR, "voiceguard_audio_model_final.keras")
             if os.path.exists(covid_model_path):
                 try:
-                    # Use compile=False to avoid version compatibility issues
+                    import tensorflow as tf
                     logger.info(f"Attempting to load COVID Keras model from: {covid_model_path}")
-                    try:
-                        # Try regular tf.keras first
-                        covid_model = tf.keras.models.load_model(covid_model_path, compile=False)
-                        covid_model_is_tflite = False
-                        logger.info("✅ COVID audio model loaded successfully via tf.keras!")
-                    except Exception as keras_err:
-                        err_str = str(keras_err).lower()
-                        logger.warning(f"⚠️ Initial tf.keras load failed: {type(keras_err).__name__}")
-                        
-                        # Fallback for potential Keras 3 mismatch, serialization errors, or environment integration issues
-                        if any(s in err_str for s in ["deserialization", "functional", "keras_version", "keras.src", "keras.api", "not found"]):
-                            logger.info("💡 Potential Keras version mismatch or integration issue, trying direct keras import...")
-                            try:
-                                import keras
-                                covid_model = keras.models.load_model(covid_model_path, compile=False)
-                                covid_model_is_tflite = False
-                                logger.info("✅ COVID audio model loaded successfully via direct keras!")
-                            except Exception as e2:
-                                logger.error(f"❌ Both tf.keras and direct keras failed: {str(e2)}")
-                                # If both fail, let it fall through to the final exception handler
-                                raise keras_err
-                        else:
-                            raise keras_err
-                    
-                    # Verify model structure
-                    if covid_model:
-                        try:
-                            logger.info(f"   Model loaded. Input shape: {covid_model.input_shape}")
-                            logger.info(f"   Model output shape: {covid_model.output_shape}")
-                        except Exception as shape_err:
-                            logger.warning(f"⚠️ Could not log model shapes: {str(shape_err)}")
-                            
-                except Exception as e:
-                    err_msg = str(e)
-                    if len(err_msg) > 1000:
-                        err_msg = err_msg[:1000] + "... [TRUNCATED]"
-                    logger.error(f"❌ CRITICAL ERROR loading COVID model: {type(e).__name__} - {err_msg}")
+                    covid_model = tf.keras.models.load_model(covid_model_path, compile=False)
+                    covid_model_is_tflite = False
+                    logger.info("✅ COVID audio model loaded successfully via tf.keras!")
+                except Exception as keras_err:
+                    logger.error(f"❌ Failed to load Keras model: {str(keras_err)}")
                     covid_model = None
             else:
                 logger.warning(f"⚠️ COVID model file not found at: {covid_model_path}")
@@ -289,7 +269,7 @@ def load_or_create_models():
         if disable_heavy_ml:
             logger.info("🔌 Lite Mode: Skipping COVID audio model loading to save memory")
         else:
-            logger.warning("⚠️ TensorFlow not available, skipping COVID model")
+            logger.warning("⚠️ TensorFlow/TFLite not available, skipping COVID model")
     
     # Try to load disease model
     disease_model_path = os.path.join(MODEL_DIR, "disease_classification_model.pkl")
@@ -455,17 +435,11 @@ def safe_process_audio(audio_file):
         return None, str(e)
 
 # =======================
-def process_audio_for_covid(audio_file):
+def process_audio_for_covid(y, sr):
     """
-    Process audio file to match your training data preparation:
-    - Load audio at 22050 Hz, 3 seconds duration (matches training)
-    - Generate mel spectrogram with same parameters as training
-    - Convert to dB scale
-    - Handle variable length with padding/truncation
-    - Normalize using mean/std (not min/max)
-    - Clip to [-3, 3] and scale to [0, 1]
-    - Resize to 224x224
-    - Stack to 3 channels
+    Process pre-loaded audio data to match your training data preparation.
+    y: numpy array of audio samples
+    sr: sample rate
     """
     if not LIBROSA_AVAILABLE or not NUMPY_AVAILABLE:
         logger.error("❌ Librosa or NumPy not available for audio processing")
@@ -476,26 +450,19 @@ def process_audio_for_covid(audio_file):
         return None
         
     try:
-        # Save current position
-        current_pos = audio_file.tell()
-        audio_file.seek(0)
-        
-        # Load audio file - exactly as in training
-        audio_bytes = audio_file.read()
-        
-        # Load with same parameters as training: sr=22050, duration=3.0
-        y, sr = librosa.load(io.BytesIO(audio_bytes), sr=22050, duration=3.0)
+        # Work on a copy to avoid affecting other functions
+        y_proc = y.copy()
         
         # Ensure fixed length (3 seconds * 22050 Hz = 66150 samples)
         target_len = 3 * 22050  # 66150 samples
-        if len(y) < target_len:
-            y = np.pad(y, (0, target_len - len(y)), mode='constant')
+        if len(y_proc) < target_len:
+            y_proc = np.pad(y_proc, (0, target_len - len(y_proc)), mode='constant')
         else:
-            y = y[:target_len]
+            y_proc = y_proc[:target_len]
         
         # Generate mel spectrogram - MATCHES TRAINING PARAMETERS
         mel_spec = librosa.feature.melspectrogram(
-            y=y, 
+            y=y_proc, 
             sr=sr, 
             n_mels=128, 
             fmax=8000, 
@@ -515,37 +482,28 @@ def process_audio_for_covid(audio_file):
         # Resize to 224x224 (model's expected input)
         mel_resized = cv2.resize(mel_spec_db, (224, 224), interpolation=cv2.INTER_LINEAR)
         
-        # Normalization - MATCHES TRAINING: (x - mean) / std, clip to [-3,3], then scale to [0,1]
+        # Normalization - MATCHES TRAINING
         eps = 1e-8
         mel_normalized = (mel_resized - mel_resized.mean()) / (mel_resized.std() + eps)
         mel_normalized = np.clip(mel_normalized, -3, 3)
         mel_normalized = (mel_normalized + 3) / 6  # Scale to [0, 1]
         
-        # Stack to 3 channels (RGB) - matches training
+        # Stack to 3 channels (RGB)
         mel_rgb = np.stack([mel_normalized] * 3, axis=-1)
         
         # Add batch dimension: (1, 224, 224, 3)
         mel_rgb = mel_rgb[np.newaxis, ...]
         
-        # Reset file pointer for other functions
-        audio_file.seek(current_pos)
-        
         logger.info(f"✅ Audio processed for COVID: shape {mel_rgb.shape}")
         
         # EXPLICIT GARBAGE COLLECTION
+        del y_proc
         gc.collect()
         
         return mel_rgb
         
     except Exception as e:
         logger.error(f"❌ Audio processing for COVID failed: {str(e)}")
-        import traceback
-        logger.error(traceback.format_exc())
-        # Reset file pointer on error
-        try:
-            audio_file.seek(current_pos)
-        except:
-            pass
         return None
 
 # =======================
@@ -640,51 +598,43 @@ def predict_from_audio(mel_spectrogram):
 # SIMPLIFIED AUDIO FEATURES FOR RULES
 # (Optional - for rule enhancement)
 # =======================
-def extract_audio_features_for_rules(audio_file):
+def extract_audio_features_for_rules(y, sr):
     """
-    Extract simple audio statistics for rule-based enhancement
-    This is separate from the main COVID model
+    Extract simple audio statistics from pre-loaded data.
     """
     if not LIBROSA_AVAILABLE or not NUMPY_AVAILABLE:
         return None
     
     try:
-        # Save current position
-        current_pos = audio_file.tell()
-        audio_file.seek(0)
-        
-        # Load audio
-        audio_bytes = audio_file.read()
-        y, sr = librosa.load(io.BytesIO(audio_bytes), sr=22050, duration=3.0)
-        
-        # Reset file pointer
-        audio_file.seek(current_pos)
-        
         features = {}
         
-        # Basic features (just for rule enhancement)
-        features['rms'] = float(np.sqrt(np.mean(y**2)))
-        features['zero_crossing_rate'] = float(np.mean(librosa.feature.zero_crossing_rate(y)))
+        # Use first 3 seconds for rules as well
+        target_len = 3 * 22050
+        y_rules = y[:target_len] if len(y) > target_len else y
+        
+        # Basic features
+        features['rms'] = float(np.sqrt(np.mean(y_rules**2)))
+        features['zero_crossing_rate'] = float(np.mean(librosa.feature.zero_crossing_rate(y_rules)))
         
         # Spectral features
-        spectral_centroids = librosa.feature.spectral_centroid(y=y, sr=sr)[0]
+        spectral_centroids = librosa.feature.spectral_centroid(y=y_rules, sr=sr)[0]
         features['spectral_centroid_mean'] = float(np.mean(spectral_centroids))
         
-        # Mel spectrogram mean (simple statistic)
-        mel_spec = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=128, fmax=8000)
+        # Mel spectrogram mean
+        mel_spec = librosa.feature.melspectrogram(y=y_rules, sr=sr, n_mels=128, fmax=8000)
         mel_spec_db = librosa.power_to_db(mel_spec, ref=np.max)
         features['mel_spectrogram_mean'] = float(np.mean(mel_spec_db))
         
         logger.info(f"✅ Extracted {len(features)} audio features for rules")
+        
+        # Explicitly clean up small temp array
+        del y_rules
+        gc.collect()
+        
         return features
         
     except Exception as e:
         logger.error(f"❌ Audio feature extraction failed: {str(e)}")
-        # Reset file pointer on error
-        try:
-            audio_file.seek(current_pos)
-        except:
-            pass
         return None
 
 # =======================
@@ -1633,40 +1583,43 @@ def predict():
             if audio_file and audio_file.filename != '':
                 logger.info(f"🎤 Audio file received: {audio_file.filename}")
                 
-                # Extract audio features for rule-based enhancement (optional)
-                # Skip if in Lite Mode to avoid Librosa memory spikes
+                # Check for Lite Mode
                 disable_heavy_ml = os.environ.get('RENDER_LITE_MODE', 'false').lower() == 'true'
                 
-                if not disable_heavy_ml:
-                    audio_features = extract_audio_features_for_rules(audio_file)
-                else:
-                    logger.info("🔌 Lite Mode: Skipping heavy audio feature extraction")
-                    audio_features = None
-                
-                # Process for COVID detection using mel spectrograms (matches training)
-                # CHECK FOR LITE MODE
-                disable_heavy_ml = os.environ.get('RENDER_LITE_MODE', 'false').lower() == 'true'
-                
-                if covid_model and TENSORFLOW_AVAILABLE and not disable_heavy_ml:
-                    try:
-                        logger.info("🧠 Running heavy COVID audio ML model...")
-                        mel_spectrogram = process_audio_for_covid(audio_file)
+                # ONE-TIME LOAD: This is the memory-critical part
+                try:
+                    logger.info("📡 Loading audio into memory (one-time)...")
+                    y, sr = safe_process_audio(audio_file)
+                    
+                    if y is not None:
+                        # Extract features for rules using the already loaded data
+                        if not disable_heavy_ml:
+                            audio_features = extract_audio_features_for_rules(y, sr)
                         
-                        if mel_spectrogram is not None:
-                            # Make prediction using the COVID model
-                            audio_prediction, audio_confidence, audio_covid_score = predict_from_audio(mel_spectrogram)
-                            
-                            # Clean up
-                            del mel_spectrogram
-                            gc.collect()
-                    except Exception as ml_err:
-                        logger.error(f"⚠️ Heavy ML failed (possibly OOM): {str(ml_err)}")
-                        # Fall through to rule-based
-                else:
-                    if disable_heavy_ml:
-                        logger.info("🔌 Lite Mode: Skipping heavy COVID audio ML model")
+                        # Process for COVID model using the already loaded data
+                        if covid_model and (TFLITE_RUNTIME_AVAILABLE or TENSORFLOW_AVAILABLE) and not disable_heavy_ml:
+                            try:
+                                logger.info("🧠 Running optimized audio ML (TFLite or Fallback Keras)...")
+                                mel_spectrogram = process_audio_for_covid(y, sr)
+                                
+                                if mel_spectrogram is not None:
+                                    # Make prediction
+                                    audio_prediction, audio_confidence, audio_covid_score = predict_from_audio(mel_spectrogram)
+                                    
+                                    # AGGRESSIVE CLEANUP
+                                    del mel_spectrogram
+                                    gc.collect()
+                            except Exception as ml_err:
+                                logger.error(f"⚠️ Heavy ML failed: {str(ml_err)}")
+                        
+                        # CLEAN UP THE MAIN AUDIO ARRAY IMMEDIATELY
+                        del y
+                        gc.collect()
                     else:
-                        logger.info("⚠️ COVID model or TensorFlow not available for audio ML")
+                        logger.warning("⚠️ Could not load audio data from file")
+                        
+                except Exception as load_err:
+                    logger.error(f"❌ Audio pipeline crashed during load: {str(load_err)}")
         
         # ===== SYMPTOM-BASED PREDICTION =====
         ml_prediction = None
