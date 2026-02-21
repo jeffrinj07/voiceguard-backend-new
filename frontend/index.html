@@ -1736,13 +1736,14 @@
                 console.log("Language:", currentLang);
 
                 // Send to backend - Use Render URL when deployed
-                const backendUrl = window.location.hostname === 'localhost'
-                    ? "http://localhost:5000/predict"
-                    : "https://voiceguard-backend-new.onrender.com/predict"; // Update with your Render URL
+                const backendBaseUrl = window.location.hostname === 'localhost'
+                    ? "http://localhost:5000"
+                    : "https://voiceguard-backend-new.onrender.com";
 
-                const response = await fetch(backendUrl, {
+                const response = await fetch(`${backendBaseUrl}/predict`, {
                     method: "POST",
-                    body: formData
+                    body: formData,
+                    credentials: "omit" // Changed to 'omit' unless you specifically need cookies, to avoid complex CORS issues with 'include'
                 });
 
                 console.log("Response status:", response.status);

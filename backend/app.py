@@ -44,12 +44,23 @@ app = Flask(__name__,
             static_url_path='')
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB limit
 
-# Configure CORS
+# Configure CORS with explicit domains
+ALLOWED_ORIGINS = [
+    "http://localhost:5000",
+    "http://localhost:8080",
+    "http://127.0.0.1:5000",
+    "http://127.0.0.1:8080",
+    "https://voiceguard-5db49.web.app",
+    "https://voiceguard-5db49.firebaseapp.com",
+    "https://voiceguard-backend-new.onrender.com"
+]
+
 CORS(app, resources={
     r"/*": {
-        "origins": "*",
+        "origins": ALLOWED_ORIGINS,
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization", "Accept", "Origin", "X-Requested-With"]
+        "allow_headers": ["Content-Type", "Authorization", "Accept", "Origin", "X-Requested-With"],
+        "supports_credentials": True
     }
 })
 
@@ -1490,10 +1501,16 @@ def predict():
     """
     # Handle preflight request explicitly
     if request.method == "OPTIONS":
+        origin = request.headers.get("Origin")
         response = make_response()
-        response.headers.add("Access-Control-Allow-Origin", "*")
+        if origin in ALLOWED_ORIGINS:
+            response.headers.add("Access-Control-Allow-Origin", origin)
+        else:
+            response.headers.add("Access-Control-Allow-Origin", "*")
+            
         response.headers.add('Access-Control-Allow-Headers', "Content-Type,Authorization,Accept,Origin,X-Requested-With")
         response.headers.add('Access-Control-Allow-Methods', "GET,PUT,POST,DELETE,OPTIONS")
+        response.headers.add('Access-Control-Allow-Credentials', "true")
         return response
         
     try:
@@ -2000,6 +2017,19 @@ VOICEGUARD_PROJECT/
     except Exception as e:
         logger.error(f"Error serving frontend: {str(e)}")
         return jsonify({"error": "Frontend not available"}), 404
+
+@app.route("/health", methods=["GET"])
+def health():
+    """Basic health check endpoint"""
+    return jsonify({
+        "status": "online",
+        "timestamp": datetime.now().isoformat(),
+        "firebase": db is not None,
+        "models": {
+            "disease": disease_model is not None,
+            "covid": covid_model is not None
+        }
+    }), 200
 
 @app.route("/test", methods=["GET"])
 def test():
