@@ -82,9 +82,21 @@ try:
     
     if firebase_creds_json:
         # Parse JSON string from environment variable
-        cred_dict = json.loads(firebase_creds_json)
-        cred = credentials.Certificate(cred_dict)
-    else:
+        try:
+            cred_dict = json.loads(firebase_creds_json)
+            # If cred_dict is still a string (double-encoded), load it again
+            if isinstance(cred_dict, str):
+                logger.info("💡 Firebase credentials appear to be double-encoded, parsing again...")
+                cred_dict = json.loads(cred_dict)
+            
+            cred = credentials.Certificate(cred_dict)
+            logger.info("✅ Firebase credentials loaded from environment variable")
+        except Exception as parse_err:
+            logger.error(f"❌ Failed to parse FIREBASE_CREDENTIALS JSON: {str(parse_err)}")
+            # Fall through to other loading methods
+            cred = None
+    
+    if not firebase_creds_json or not cred:
         # Try to load from file
         cred_path = os.path.join(BASE_DIR, 'firebase-credentials.json')
         if os.path.exists(cred_path):
