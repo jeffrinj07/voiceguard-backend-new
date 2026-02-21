@@ -271,6 +271,15 @@ def _import_soundfile():
         logger.error(f"❌ Soundfile not available: {str(e)}")
         return None
 
+def _import_soxr():
+    try:
+        import soxr
+        logger.info("✅ soxr imported successfully")
+        return soxr
+    except ImportError as e:
+        logger.error(f"❌ soxr not available: {str(e)}")
+        return None
+
 def _import_scipy_signal():
     global SCIPY_AVAILABLE
     try:
@@ -481,18 +490,21 @@ def enhance_features(symptoms_dict, age, cough_days):
 # =======================
 def safe_process_audio(audio_file):
     """
-    Safely process audio file using soundfile (faster/lighter than librosa.load).
-    Loads native rate first, slices to 10s, then resamples if needed.
+    ULTRA-FAST audio processing:
+    1. Check sample rate via sf.info (no load).
+    2. Load ONLY 10 seconds from disk (sf.read frames).
+    3. Resample directly via soxr (bypassing librosa overhead).
     """
     log_memory("Before safe_process_audio")
     
     # Lazy imports
     sf_module = _import_soundfile()
+    soxr_module = _import_soxr()
     librosa_module = _import_librosa()
     np_module = _import_numpy()
     
-    if not sf_module or not librosa_module or not np_module:
-        logger.warning("⚠️ Soundfile/Librosa/NumPy missing, falling back to basic librosa.load")
+    if not sf_module or not np_module:
+        logger.warning("⚠️ Critical modules (soundfile/numpy) missing, falling back to basic librosa.load")
         if librosa_module:
             try:
                 audio_file.seek(0)
@@ -503,52 +515,45 @@ def safe_process_audio(audio_file):
         return None, "Required modules for audio loading not available"
     
     try:
-        # 1. RAW LOAD: Use soundfile to read without resampling
+        # 1. PEAK DATA (Info Only): Get sample rate without loading samples
         audio_file.seek(0)
-        logger.info("📡 Loading raw audio via soundfile...")
+        info = sf_module.info(audio_file)
+        native_sr = info.samplerate
         
-        # Read the file header to check length first if possible
-        # For simplicity and speed on small files, we just read up to 15s worth of samples
-        # most mobile recordings are 44.1k or 48k. 15s * 48k = 720k samples.
-        data, native_sr = sf_module.read(audio_file)
-        
-        # 2. SLICE FIRST: Only keep what we need (max 10s)
+        # 2. DISK-LEVEL SLICE: Read exactly 10s from the file
         max_samples = 10 * native_sr
-        if len(data) > max_samples:
-            logger.info(f"✂️ Slicing audio from {len(data)/native_sr:.1f}s to 10.0s")
-            data = data[:max_samples]
-            
+        audio_file.seek(0)
+        logger.info(f"📡 Dish-level load: 10s @ {native_sr}Hz")
+        data, _ = sf_module.read(audio_file, frames=max_samples)
+        
         # Handle stereo -> mono
         if len(data.shape) > 1:
-            logger.info("📢 Converting stereo to mono")
             data = np_module.mean(data, axis=1)
             
-        # 3. RESAMPLE: Use librosa.resample on the small slice
-        # This uses soxr (high performance) if installed
+        # 3. FAST RESAMPLE: Use soxr directly for speed
         target_sr = 22050
         if native_sr != target_sr:
-            logger.info(f"🔄 Resampling: {native_sr}Hz -> {target_sr}Hz (sliced data)")
-            y = librosa_module.resample(y=data, orig_sr=native_sr, target_sr=target_sr)
+            if soxr_module:
+                logger.info(f"🔄 Direct soxr resampling: {native_sr}Hz -> {target_sr}Hz")
+                y = soxr_module.resample(data, native_sr, target_sr)
+            elif librosa_module:
+                logger.info(f"🔄 librosa.resample fallback: {native_sr}Hz -> {target_sr}Hz")
+                y = librosa_module.resample(y=data, orig_sr=native_sr, target_sr=target_sr)
+            else:
+                y = data # No resample possible
         else:
             y = data
             
-        # Reset file pointer for housekeeping
-        audio_file.seek(0)
-        
-        if len(y) == 0:
-            return None, "Empty audio data"
-            
-        log_memory("After optimized audio load")
-        
-        # Cleanup raw data copy
+        # Cleanup temp data
         if id(y) != id(data):
             del data
         gc.collect()
         
+        log_memory("After Ultra-Fast audio load")
         return y, target_sr
         
     except Exception as e:
-        logger.error(f"❌ Error in safe_process_audio: {str(e)}")
+        logger.error(f"❌ Ultra-Fast load failed: {str(e)}")
         # Ultimate fallback
         try:
             audio_file.seek(0)
