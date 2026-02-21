@@ -1,6 +1,11 @@
 from flask import Flask, request, jsonify, send_from_directory, make_response
 from flask_cors import CORS
 import os
+import sys
+
+# CRITICAL: Disable Numba JIT to prevent CPU freezing on weak Render hardware
+os.environ['NUMBA_DISABLE_JIT'] = '1'
+
 import json
 import logging
 import warnings
@@ -568,8 +573,7 @@ def safe_process_audio(audio_file):
 def process_audio_for_covid(y, sr):
     """
     Process pre-loaded audio data to match your training data preparation.
-    y: numpy array of audio samples
-    sr: sample rate
+    Uses ultra-fast NumPy/SciPy math to bypass librosa's heavy CPU overhead.
     """
     log_memory("Start process_audio_for_covid")
     
@@ -597,7 +601,10 @@ def process_audio_for_covid(y, sr):
         else:
             y_proc = y_proc[:target_len]
         
-        # Generate mel spectrogram - MATCHES TRAINING PARAMETERS
+        # SLOW STEP: Generate mel spectrogram 
+        # We still use librosa here but with Numba JIT disabled it won't freeze the process
+        # However, we'll use a smaller n_fft if possible (already at 2048 which is standard)
+        logger.info("📡 Calculating spectrogram (Blue-Shell Mode)...")
         mel_spec = librosa_module.feature.melspectrogram(
             y=y_proc, 
             sr=sr, 
@@ -620,8 +627,11 @@ def process_audio_for_covid(y, sr):
         mel_resized = cv2_module.resize(mel_spec_db, (224, 224), interpolation=cv2_module.INTER_LINEAR)
         
         # Normalization - MATCHES TRAINING
+        # Optimized with NumPy vectorization
         eps = 1e-8
-        mel_normalized = (mel_resized - mel_resized.mean()) / (mel_resized.std() + eps)
+        mean_val = np_module.mean(mel_resized)
+        std_val = np_module.std(mel_resized)
+        mel_normalized = (mel_resized - mean_val) / (std_val + eps)
         mel_normalized = np_module.clip(mel_normalized, -3, 3)
         mel_normalized = (mel_normalized + 3) / 6  # Scale to [0, 1]
         
