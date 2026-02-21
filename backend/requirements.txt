@@ -11,5 +11,6 @@ gunicorn==21.2.0
 soundfile==0.12.1
 audioread==3.0.0
 python-dotenv==1.0.0
+psutil==5.9.5
 setuptools
 wheel
